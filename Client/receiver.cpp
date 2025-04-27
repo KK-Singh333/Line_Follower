@@ -3,247 +3,208 @@
 #include <PubSubClient.h>
 
 // Motor control pins
-#define AIN1 21
-#define BIN1 25
-#define AIN2 22
-#define BIN2 33
-#define PWMA 23
-#define PWMB 32
-#define STBY 19
+#define AIN1 10
+#define BIN1 07
+#define AIN2 09
+#define BIN2 07
+#define PWMA 11
+#define PWMB 06
 
-const int offsetA = 1;
-const int offsetB = 1;
-
-// Motor driver setup
 L298N motor1(PWMA, AIN1, AIN2);
 L298N motor2(PWMB, BIN1, BIN2);
 
-// Sensor setup
-const uint8_t SensorCount = 4;  // Changed to 4 sensors
-uint8_t sensorPins[SensorCount] = {26, 27, 14, 12};  // Modified sensor pins array
+// Sensors
+const uint8_t SensorCount = 4;
+uint8_t sensorPins[SensorCount] = {12, 13, 15, 16};
 uint16_t sensorValues[SensorCount];
 uint16_t sensorMin[SensorCount];
 uint16_t sensorMax[SensorCount];
 
-float Kp = 10.0; 
-float Ki = 5.0;  
-float Kd = 2.0; 
-uint8_t multiP = 1, multiI = 1, multiD = 1;
+// PID constants
+float Kp = 10.0, Ki = 5.0, Kd = 2.0;
 float Pvalue, Ivalue, Dvalue;
 int previousError = 0, error = 0;
 
-const char *ssid = "YOUR_SSID";
-const char *password = "YOUR_PASSWORD";
-const char *mqtt_server = "192.168.1.100"; 
+// WiFi and MQTT
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* mqtt_server = "YOUR_PC_IP";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-boolean onoff = false;
+boolean onoff = true;   // <-- default ON
+boolean wifiAvailable = false;  // <-- new flag
 int lsp, rsp;
 int lfspeed = 230;
 
-void setup_wifi()
-{
-    delay(10);
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        delay(500);
-    }
+void setup_wifi() {
+  delay(10);
+  WiFi.begin(ssid, password);
+
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 5000) {  // wait max 5 sec
+    delay(500);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiAvailable = true;
+  } else {
+    wifiAvailable = false;
+  }
 }
 
-void callback(char *topic, byte *message, unsigned int length)
-{
-    String msg;
-    for (int i = 0; i < length; i++)
-    {
-        msg += (char)message[i];
-    }
-    processMessage(msg);
+void callback(char* topic, byte* message, unsigned int length) {
+  String msg;
+  for (int i = 0; i < length; i++) {
+    msg += (char)message[i];
+  }
+  processMessage(msg);
 }
 
-void reconnect()
-{
-    while (!client.connected())
-    {
-        if (client.connect("ESP32Client"))
-        {
-            client.subscribe("robot/voice");
-        }
-        else
-        {
-            delay(5000);
-        }
+void reconnect() {
+  if (!client.connected()) {
+    if (client.connect("ESP32Client")) {
+      client.subscribe("robot/voice");
     }
+  }
 }
 
-void setup()
-{
-    Serial.begin(115200);
-    setup_wifi();
+void setup() {
+  Serial.begin(115200);
+  setup_wifi();
+
+  if (wifiAvailable) {
     client.setServer(mqtt_server, 1883);
     client.setCallback(callback);
+  } else {
+    onoff = true;  // keep robot active if no WiFi
+  }
 
-    calibrateSensors();
+  calibrateSensors();
 }
 
-void loop()
-{
-    if (!client.connected())
-    {
-        reconnect();
+void loop() {
+  if (wifiAvailable) {
+    if (!client.connected()) {
+      reconnect();
     }
     client.loop();
+  }
 
-    if (onoff)
-    {
-        robot_control();
-    }
-    else
-    {
-        motor1.stop();
-        motor2.stop();
-    }
+  if (onoff) {
+    robot_control();
+  } else {
+    motor1.stop();
+    motor2.stop();
+  }
 }
 
-void calibrateSensors()
-{
-    for (int j = 0; j < SensorCount; j++)
-    {
-        sensorMin[j] = 4095;
-        sensorMax[j] = 0;
-    }
+void calibrateSensors() {
+  for (int i = 0; i < SensorCount; i++) {
+    sensorMin[i] = 4095;
+    sensorMax[i] = 0;
+  }
 
-    for (int i = 0; i < 400; i++)
-    {
-        for (int j = 0; j < SensorCount; j++)
-        {
-            uint16_t val = analogRead(sensorPins[j]);
-            if (val < sensorMin[j])
-                sensorMin[j] = val;
-            if (val > sensorMax[j])
-                sensorMax[j] = val;
-        }
-        delay(5);
+  for (int i = 0; i < 400; i++) {
+    for (int j = 0; j < SensorCount; j++) {
+      uint16_t val = analogRead(sensorPins[j]);
+      if (val < sensorMin[j]) sensorMin[j] = val;
+      if (val > sensorMax[j]) sensorMax[j] = val;
     }
+    delay(5);
+  }
 }
 
-void readSensors()
-{
-    for (int i = 0; i < SensorCount; i++)
-    {
-        uint16_t val = analogRead(sensorPins[i]);
-        val = constrain(val, sensorMin[i], sensorMax[i]);
-        sensorValues[i] = map(val, sensorMin[i], sensorMax[i], 0, 1000);
-    }
+void readSensors() {
+  for (int i = 0; i < SensorCount; i++) {
+    uint16_t val = analogRead(sensorPins[i]);
+    val = constrain(val, sensorMin[i], sensorMax[i]);
+    sensorValues[i] = map(val, sensorMin[i], sensorMax[i], 0, 1000);
+  }
 }
 
-uint16_t readLineBlack()
-{
-    uint32_t avg = 0;
-    uint16_t sum = 0;
+uint16_t readLineBlack() {
+  uint32_t avg = 0;
+  uint16_t sum = 0;
+  readSensors();
 
-    readSensors();
-
-    for (int i = 0; i < SensorCount; i++)
-    {
-        avg += (uint32_t)sensorValues[i] * (i * 1000);
-        sum += sensorValues[i];
-    }
-    if (sum == 0)
-        return 2000;
-    return avg / sum;
+  for (int i = 0; i < SensorCount; i++) {
+    avg += (uint32_t)sensorValues[i] * (i * 1000);
+    sum += sensorValues[i];
+  }
+  if (sum == 0) return 1500;
+  return avg / sum;
 }
 
-void robot_control()
-{
-    uint16_t position = readLineBlack();
-    error = 2000 - position;
+void robot_control() {
+  uint16_t position = readLineBlack();
+  error = 1500 - position;
 
-    while (allSensorsBlack())
-    {
-        if (previousError > 0)
-        {
-            motor_drive(-230, 230);
-        }
-        else
-        {
-            motor_drive(230, -230);
-        }
-        position = readLineBlack();
+  while (allSensorsBlack()) {
+    if (previousError > 0) {
+      motor_drive(-230, 230);
+    } else {
+      motor_drive(230, -230);
     }
+    position = readLineBlack();
+  }
 
-    PID_Linefollow(error);
+  PID_Linefollow(error);
 }
 
-void PID_Linefollow(int error)
-{
-    static int I = 0;
+void PID_Linefollow(int error) {
+  static int I = 0;
+  int P = error;
+  I += error;
+  int D = error - previousError;
 
-    int P = error;
-    I += error;
-    int D = error - previousError;
+  Pvalue = (Kp / 10.0) * P;
+  Ivalue = (Ki / 10.0) * I;
+  Dvalue = (Kd / 10.0) * D;
 
-    Pvalue = (Kp / pow(10, multiP)) * P;
-    Ivalue = (Ki / pow(10, multiI)) * I;
-    Dvalue = (Kd / pow(10, multiD)) * D;
+  float PIDvalue = Pvalue + Ivalue + Dvalue;
+  previousError = error;
 
-    float PIDvalue = Pvalue + Ivalue + Dvalue;
-    previousError = error;
+  lsp = lfspeed - PIDvalue;
+  rsp = lfspeed + PIDvalue;
 
-    lsp = lfspeed - PIDvalue;
-    rsp = lfspeed + PIDvalue;
+  lsp = constrain(lsp, -255, 255);
+  rsp = constrain(rsp, -255, 255);
 
-    lsp = constrain(lsp, -255, 255);
-    rsp = constrain(rsp, -255, 255);
-
-    motor_drive(lsp, rsp);
+  motor_drive(lsp, rsp);
 }
 
-void processMessage(String msg)
-{
-    if (msg == "start")
-    {
-        onoff = true;
-    }
-    else if (msg == "stop")
-    {
-        onoff = false;
-    }
+void processMessage(String msg) {
+  if (msg == "start") {
+    onoff = true;
+  } else if (msg == "stop") {
+    onoff = false;
+  }
 }
 
-void motor_drive(int left, int right)
-{
-    if (right > 0)
-    {
-        motor2.setSpeed(right);
-        motor2.forward();
-    }
-    else
-    {
-        motor2.setSpeed(abs(right));
-        motor2.backward();
-    }
+void motor_drive(int left, int right) {
+  if (right > 0) {
+    motor2.setSpeed(right);
+    motor2.forward();
+  } else {
+    motor2.setSpeed(abs(right));
+    motor2.backward();
+  }
 
-    if (left > 0)
-    {
-        motor1.setSpeed(left);
-        motor1.forward();
-    }
-    else
-    {
-        motor1.setSpeed(abs(left));
-        motor1.backward();
-    }
+  if (left > 0) {
+    motor1.setSpeed(left);
+    motor1.forward();
+  } else {
+    motor1.setSpeed(abs(left));
+    motor1.backward();
+  }
 }
 
-bool allSensorsBlack()
-{
-    for (int i = 0; i < SensorCount; i++)
-    {
-        if (sensorValues[i] < 900)
-            return false;
-    }
-    return true;
+bool allSensorsBlack() {
+  for (int i = 0; i < SensorCount; i++) {
+    if (sensorValues[i] < 900)
+      return false;
+  }
+  return true;
 }
