@@ -1,5 +1,3 @@
-// Modified Code with Custom QTR Sensor Replacement and Full Documentation
-
 #include <L298N.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -21,12 +19,11 @@ L298N motor1(PWMA, AIN1, AIN2);
 L298N motor2(PWMB, BIN1, BIN2);
 
 // Sensor setup
-const uint8_t SensorCount = 5;
-uint8_t sensorPins[SensorCount] = {26, 27, 14, 12, 13};
+const uint8_t SensorCount = 4;  // Changed to 4 sensors
+uint8_t sensorPins[SensorCount] = {26, 27, 14, 12};  // Modified sensor pins array
 uint16_t sensorValues[SensorCount];
 uint16_t sensorMin[SensorCount];
 uint16_t sensorMax[SensorCount];
-
 
 float Kp = 10.0; 
 float Ki = 5.0;  
@@ -66,7 +63,6 @@ void callback(char *topic, byte *message, unsigned int length)
     processMessage(msg);
 }
 
-
 void reconnect()
 {
     while (!client.connected())
@@ -88,7 +84,6 @@ void setup()
     setup_wifi();
     client.setServer(mqtt_server, 1883);
     client.setCallback(callback);
-
 
     calibrateSensors();
 }
